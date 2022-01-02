@@ -10,15 +10,15 @@ import java.util.logging.Logger;
 
 public class SenseairS8Manager {
     private static final Logger LOGGER = Logger.getLogger(SenseairS8Manager.class.getSimpleName());
+    private static MqttClient mqttClient;
 
     public static void main(String[] args) {
         final SenseairS8Driver driver = new SenseairS8Driver();
-        final MqttClient mqttClient;
         try {
             mqttClient = new MqttClient("tcp://192.168.2.15:1883", "senseair");
-            mqttClient.connect();
         } catch (MqttException e) {
-            throw new RuntimeException("Could not initialize mqtt: " + e.getMessage());
+            LOGGER.severe("Could not initialize client: " + e.getMessage());
+            throw new RuntimeException("Could not initialize client", e);
         }
 
         ScheduledFuture<?> future = Executors.newSingleThreadScheduledExecutor()
@@ -27,9 +27,19 @@ public class SenseairS8Manager {
                             final Integer measure = driver.measure();
                             LOGGER.info("CO2: " + measure + " ppm");
                             try {
-                                mqttClient.publish("senseair-s8", new MqttMessage(String.valueOf(measure).getBytes(StandardCharsets.UTF_8)));
+                                publish(measure);
                             } catch (MqttException e) {
-                                LOGGER.severe("Could not publish to MQTT: " + e.getMessage());
+                                if (e.getMessage().contains("Client is not connected")) {
+                                    LOGGER.info("Reconnecting client");
+                                    connect();
+                                    try {
+                                        publish(measure);
+                                    } catch (MqttException ex) {
+                                        LOGGER.severe("Retry: Could not publish to MQTT: " + e.getMessage());
+                                    }
+                                } else {
+                                    LOGGER.severe("Could not publish to MQTT: " + e.getMessage());
+                                }
                             }
                         },
                         0L,
@@ -40,6 +50,18 @@ public class SenseairS8Manager {
             if (!future.isDone())
                 future.cancel(true);
         }));
+    }
+
+    private static void publish(Integer measure) throws MqttException {
+        mqttClient.publish("senseair-s8", new MqttMessage(String.valueOf(measure).getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static void connect() {
+        try {
+            mqttClient.connect();
+        } catch (MqttException e) {
+            throw new RuntimeException("Could not connect to mqtt broker: " + e.getMessage());
+        }
     }
 
 }
